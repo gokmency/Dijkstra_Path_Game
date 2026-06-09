@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dijkstra Cargo Network - Dual Mode</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0f172a; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        #game-canvas { display: block; width: 100vw; height: 100vh; cursor: crosshair; touch-action: none; }
+        
+        .node-label {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            text-shadow: 0px 2px 4px rgba(0,0,0,1);
+            pointer-events: none;
+            text-align: center;
+            z-index: 30; /* keep node letters above edge cost labels */
+        }
+        .node-label .node-id {
+            display: inline-block;
+            background: rgba(15, 23, 42, 0.85);
+            border-radius: 6px;
+            padding: 0 6px;
+            line-height: 1.15;
+        }
+        
+        .edge-label {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            background-color: rgba(15, 23, 42, 0.95);
+            border: 1px solid #f59e0b;
+            border-radius: 4px;
+            padding: 2px 6px;
+            font-size: 12px;
+            color: #fcd34d;
+            font-weight: 900;
+            pointer-events: none;
+            white-space: nowrap;
+            z-index: 20; /* below node letters */
+        }
+
+        /* Custom Scrollbar for Logs */
+        #log-container::-webkit-scrollbar { width: 6px; }
+        #log-container::-webkit-scrollbar-track { background: transparent; }
+        #log-container::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+
+        .modal-overlay { display: none; }
+    </style>
+    
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+
+    <script>
+        document.addEventListener('contextmenu', event => event.preventDefault());
+    </script>
+
+    <!-- UI LAYER -->
+    <div class="absolute top-0 left-0 w-full h-full pointer-events-none z-10">
+
+        <!-- TOP CENTER HUD: always visible -->
+        <div id="top-hud" class="absolute top-6 left-1/2 -translate-x-1/2 bg-slate-900/90 px-6 py-2.5 rounded-xl border border-slate-700 shadow-2xl pointer-events-auto flex items-center gap-6">
+            <div class="text-center">
+                <span class="block text-slate-400 font-bold text-[10px]">MODE</span>
+                <span id="top-mode" class="text-sm font-black text-indigo-400">-</span>
+            </div>
+            <div id="top-lives-wrap" class="text-center">
+                <span class="block text-slate-400 font-bold text-[10px]">LIVES</span>
+                <span id="top-lives" class="text-lg tracking-widest leading-none">❤️❤️❤️</span>
+            </div>
+            <div id="top-score-wrap" class="text-center">
+                <span class="block text-slate-400 font-bold text-[10px]">SCORE</span>
+                <span id="top-score" class="text-2xl font-black text-amber-400 leading-none">0</span>
+            </div>
+            <div id="top-hint" class="text-center max-w-[160px] hidden">
+                <span class="block text-slate-500 text-[11px] leading-tight">Switch to ⚔️ Challenge<br>for lives, score &amp; logs</span>
+            </div>
+        </div>
+
+        <!-- LEFT PANEL: Learning Assistant - bottom left -->
+        <div id="learning-panel" class="absolute bottom-6 left-6 bg-slate-900/90 w-72 rounded-xl border border-slate-700 shadow-xl pointer-events-auto flex flex-col max-h-[55vh]">
+            <div class="p-3 border-b border-slate-700 bg-blue-900/30 rounded-t-xl">
+                <h2 class="text-base font-extrabold text-blue-400 flex items-center gap-2">
+                    <span>🧠</span> Dijkstra Assistant
+                </h2>
+                <p class="text-xs text-slate-400 mt-0.5">Rule: Pick the lowest total cost.</p>
+            </div>
+            <div id="log-container" class="p-3 overflow-y-auto flex-1 flex flex-col gap-2 text-xs">
+            </div>
+        </div>
+
+        <!-- RIGHT PANEL: Challenge HUD - bottom right -->
+        <div id="challenge-hud" class="absolute bottom-6 right-6 bg-slate-900/90 w-56 rounded-xl border border-rose-900 shadow-2xl pointer-events-auto hidden">
+            <div class="p-3 border-b border-rose-900 bg-rose-900/20 rounded-t-xl text-center">
+                <h2 class="text-base font-extrabold text-rose-400 flex items-center justify-center gap-2">
+                    <span>⚔️</span> Challenge Mode
+                </h2>
+            </div>
+            <div class="p-4 text-center">
+                <div class="mb-4">
+                    <span class="block text-slate-400 font-bold text-xs">LIVES REMAINING</span>
+                    <div id="hud-lives" class="text-2xl mt-1 tracking-widest">❤️❤️❤️</div>
+                </div>
+                <div>
+                    <span class="block text-slate-400 font-bold text-xs">TOTAL SCORE</span>
+                    <div id="hud-score" class="text-4xl text-amber-400 font-black">0</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- CONTROLS: top right -->
+        <div class="absolute top-6 right-6 flex flex-col gap-2 pointer-events-auto items-end w-72">
+            <div class="bg-slate-900/80 p-3 rounded-lg border border-slate-700 shadow-lg flex gap-6 mb-1">
+                <div>
+                    <span class="block text-slate-400 font-bold text-xs text-center">START</span>
+                    <span id="ui-start" class="text-xl text-blue-400 font-black block text-center">-</span>
+                </div>
+                <div>
+                    <span class="block text-slate-400 font-bold text-xs text-center">TARGET</span>
+                    <span id="ui-target" class="text-xl text-emerald-400 font-black block text-center">-</span>
+                </div>
+            </div>
+            <div class="flex gap-2 w-full">
+                <select id="mode-select" class="flex-1 min-w-0 bg-slate-800 text-white font-bold py-2 px-3 rounded shadow border border-slate-600 outline-none text-sm">
+                    <option value="learning" selected>🧠 Learning Mode</option>
+                    <option value="challenge">⚔️ Challenge Mode</option>
+                </select>
+                <select id="difficulty-select" class="flex-1 min-w-0 bg-slate-800 text-white font-bold py-2 px-3 rounded shadow border border-slate-600 outline-none text-sm">
+                    <option value="6">Easy (6)</option>
+                    <option value="9" selected>Medium (9)</option>
+                    <option value="12">Hard (12)</option>
+                    <option value="20">Expert (20)</option>
+                </select>
+            </div>
+            <button id="generate-btn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-6 rounded shadow-lg transition-colors border border-indigo-400">
+                Generate New Map
+            </button>
+
+            <!-- GPAF LOGGING PANEL -->
+            <div class="w-72 bg-slate-900/85 p-3 rounded-lg border border-slate-700 shadow-lg flex flex-col gap-2 text-xs text-slate-300 mt-1">
+                <div class="font-extrabold text-slate-200 flex items-center gap-1"><span>📥</span> GPAF Game Logs</div>
+                <div id="gpaf-notice" class="text-[11px] text-amber-300 leading-snug break-words"></div>
+                <div class="flex items-center gap-2">
+                    <label for="gpaf-gameid" class="font-bold text-slate-400 whitespace-nowrap">Game ID</label>
+                    <input id="gpaf-gameid" type="text" placeholder="GM-XXXXXXXXXXXX"
+                        class="flex-1 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-white outline-none font-mono w-36" />
+                </div>
+                <div class="flex justify-between text-[11px] text-slate-400">
+                    <span>Player: <span id="gpaf-pid" class="text-slate-200 font-mono">-</span></span>
+                    <span><span id="gpaf-count" class="text-amber-400 font-bold">0</span> events</span>
+                </div>
+                <button id="gpaf-download" class="w-full bg-emerald-700 hover:bg-emerald-600 text-white font-bold py-2 px-3 rounded shadow border border-emerald-500">
+                    ⤓ Finish &amp; Download .jsonl
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- WIN SCREEN MODAL -->
+    <div id="win-modal" class="modal-overlay absolute top-0 left-0 w-full h-full bg-slate-900/90 z-50 flex items-center justify-center pointer-events-auto">
+        <div class="bg-slate-800 p-8 rounded-2xl border border-slate-600 shadow-2xl text-center max-w-md w-full">
+            <h2 class="text-4xl font-black text-emerald-400 mb-2">Target Reached!</h2>
+            <p class="text-slate-300 mb-6 text-lg">Cargo dispatched successfully.</p>
+            
+            <div id="win-stats" class="bg-slate-900 p-4 rounded-lg mb-6 text-left">
+                <!-- Injected via JS based on mode -->
+            </div>
+
+            <button id="next-level-btn" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-colors text-xl">
+                Next Level
+            </button>
+        </div>
+    </div>
+
+    <!-- GAME OVER MODAL -->
+    <div id="lose-modal" class="modal-overlay absolute top-0 left-0 w-full h-full bg-rose-950/90 z-50 flex items-center justify-center pointer-events-auto">
+        <div class="bg-slate-900 p-8 rounded-2xl border border-rose-600 shadow-2xl text-center max-w-md w-full">
+            <h2 class="text-5xl font-black text-rose-500 mb-2">GAME OVER</h2>
+            <p class="text-slate-300 mb-6 text-lg">You made too many calculation errors.</p>
+            <p class="text-slate-400 mb-6">Final Score: <span id="lose-score" class="text-amber-400 font-bold text-2xl">0</span></p>
+            
+            <button id="retry-btn" class="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition-colors text-xl">
+                Try Again
+            </button>
+        </div>
+    </div>
+
+    <div id="labels-container" class="absolute top-0 left-0 w-full h-full pointer-events-none z-20"></div>
+    <canvas id="game-canvas"></canvas>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        // --- 1. SCENE SETUP ---
+        const canvas = document.getElementById('game-canvas');
+        const scene = new THREE.Scene();
+        const aspect = window.innerWidth / window.innerHeight;
+        const d = 25; 
+        const camera = new THREE.OrthographicCamera(-d * aspect, d * aspect, d, -d, 1, 1000);
+        camera.position.set(30, 30, 30);
+        camera.lookAt(scene.position);
+        
+        const renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.mouseButtons = { LEFT: THREE.MOUSE.NONE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.ROTATE };
+        controls.enableDamping = true; 
+        controls.dampingFactor = 0.05;
+        controls.maxZoom = 4; controls.minZoom = 0.5;
+        controls.maxPolarAngle = Math.PI / 2 - 0.1; 
+
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.9);
+        dirLight.position.set(20, 40, 20);
+        scene.add(dirLight);
+        scene.add(new THREE.GridHelper(50, 50, 0x334155, 0x1e293b));
+
+        // --- 2. GAME VARIABLES & DATA ---
+        let nodesData = []; 
+        let edgesData = []; 
+        const mapGroup = new THREE.Group();
+        scene.add(mapGroup);
+        const labelsContainer = document.getElementById('labels-container');
+
+        const unknownMat = new THREE.MeshStandardMaterial({ color: 0x475569 });  
+        const frontierMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b }); 
+        const settledMat = new THREE.MeshStandardMaterial({ color: 0x3b82f6 });  
+        const targetMat = new THREE.MeshStandardMaterial({ color: 0x10b981 });   
+        const lineMat = new THREE.MeshStandardMaterial({ color: 0x64748b });
+        const activeLineMat = new THREE.MeshStandardMaterial({ color: 0x10b981, emissive: 0x10b981, emissiveIntensity: 0.4 });
+
+        function makeTube(x1, z1, x2, z2, material) {
+            const path = new THREE.LineCurve3(
+                new THREE.Vector3(x1, 0.5, z1),
+                new THREE.Vector3(x2, 0.5, z2)
+            );
+            const geo = new THREE.TubeGeometry(path, 1, 0.45, 8, false);
+            return new THREE.Mesh(geo, material);
+        }
+
+        function makeEdgePlane(x1, z1, x2, z2, weight) {} // unused, kept for compat
+
+        
+        let engine = {
+            mode: 'learning', // 'learning' | 'challenge'
+            lives: 3,
+            totalScore: 0,
+            startId: null, targetId: null, distances: {}, previous: {},
+            visited: new Set(), frontier: new Set(), isActive: false
+        };
+
+        const scoreSettings = {
+            '6':  { base: 100, lifeBonus: 50 },
+            '9':  { base: 250, lifeBonus: 100 },
+            '12': { base: 500, lifeBonus: 200 },
+            '20': { base: 1000, lifeBonus: 500 }
+        };
+
+        // --- GPAF (Gamified Play Analytics Format) v1.0 LOGGING ---
+        // Logs are recorded ONLY in Challenge mode; Learning mode is practice only.
+        // Player categories are assigned in the team tool, NOT inside the log.
+        function gpafPseudoId() {
+            try {
+                let id = localStorage.getItem('gpaf_pseudo');
+                if (!id) { id = 'p-' + Math.random().toString(36).slice(2, 8); localStorage.setItem('gpaf_pseudo', id); }
+                return id;
+            } catch (e) { return 'p-' + Math.random().toString(36).slice(2, 8); }
+        }
+        function gpafStoredGameId() {
+            try { return localStorage.getItem('gpaf_gameid') || 'GM-XXXXXXXXXXXX'; }
+            catch (e) { return 'GM-XXXXXXXXXXXX'; }
+        }
+
+        const gpaf = {
+            events: [],
+            sessionId: null,
+            playerPseudoId: gpafPseudoId(),
+            gameId: gpafStoredGameId(),
+            levelCounter: 0,
+            sessionActive: false
+        };
+
+        function gpafNowIso() { return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'); }
+
+        function gpafLog(eventType, payload = {}) {
+            gpaf.events.push({
+                ts: gpafNowIso(),
+                playerPseudoId: gpaf.playerPseudoId,
+                sessionId: gpaf.sessionId,
+                gameId: gpaf.gameId,
+                eventType,
+                payload
+            });
+            const c = document.getElementById('gpaf-count');
+            if (c) c.innerText = gpaf.events.length;
+        }
+
+        function gpafStartSession() {
+            // Only Challenge mode produces logs.
+            if (engine.mode !== 'challenge') { gpaf.sessionActive = false; return; }
+            gpaf.sessionId = 'S-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
+            gpaf.levelCounter = 0;
+            gpaf.sessionActive = true;
+            gpafLog('session_start', {});
+        }
+
+        function gpafEndSession(completed) {
+            if (!gpaf.sessionActive) return;
+            gpafLog('session_end', { completed: !!completed });
+            gpaf.sessionActive = false;
+        }
+
+        function gpafResetSession() { gpafEndSession(false); gpafStartSession(); }
+
+        function gpafUpdatePanel() {
+            const isCh = engine.mode === 'challenge';
+            const notice = document.getElementById('gpaf-notice');
+            const btn = document.getElementById('gpaf-download');
+            const cnt = document.getElementById('gpaf-count');
+            if (cnt) cnt.innerText = gpaf.events.length;
+            if (!notice || !btn) return;
+            if (isCh) {
+                notice.innerHTML = '⚔️ <b>Challenge mode</b> — your play is being recorded.';
+                notice.className = 'text-[11px] text-emerald-300 leading-snug';
+                btn.disabled = false;
+                btn.classList.remove('opacity-40', 'cursor-not-allowed');
+            } else {
+                notice.innerHTML = '🧠 <b>Learning mode</b> is practice only — <b>no logs are recorded</b> here. Switch to <b>⚔️ Challenge</b> (top-right menu) to record logs.';
+                notice.className = 'text-[11px] text-amber-300 leading-snug';
+                btn.disabled = true;
+                btn.classList.add('opacity-40', 'cursor-not-allowed');
+            }
+        }
+
+        function gpafDownload() {
+            if (engine.mode !== 'challenge') return; // safety: no logs outside Challenge mode
+            gpafEndSession(true);
+            const lines = gpaf.events.map(e => JSON.stringify(e)).join('\n');
+            const blob = new Blob([lines + '\n'], { type: 'application/x-ndjson' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `gpaf_logs_${new Date().toISOString().slice(0, 10)}_${gpaf.playerPseudoId}.jsonl`;
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+            gpafStartSession();
+        }
+
+        const playerGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+        const playerMat = new THREE.MeshStandardMaterial({ color: 0xef4444 }); 
+        let playerMesh = new THREE.Mesh(playerGeo, playerMat);
+        playerMesh.visible = false;
+        scene.add(playerMesh);
+
+        let truckAnim = { path: [], currentIdx: 0, progress: 0, isMoving: false };
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        // --- 3. UI & LOGIC HELPERS ---
+        function addLog(text, type = 'info') {
+            const container = document.getElementById('log-container');
+            const el = document.createElement('div');
+            el.className = 'p-3 rounded border text-slate-200 shadow-sm animate-fade-in';
+            
+            if (type === 'success') el.classList.add('bg-emerald-900/50', 'border-emerald-700');
+            else if (type === 'error') el.classList.add('bg-rose-900/50', 'border-rose-700');
+            else el.classList.add('bg-slate-800', 'border-slate-600');
+            
+            el.innerHTML = text;
+            container.appendChild(el);
+            // Prevent unbounded log growth - keep only last 60 entries
+            while (container.children.length > 60) container.removeChild(container.firstChild);
+            container.scrollTop = container.scrollHeight; // Auto-scroll
+        }
+
+        function clearLogs() {
+            document.getElementById('log-container').innerHTML = '';
+        }
+
+        function updateHUD() {
+            const isChallenge = engine.mode === 'challenge';
+
+            // Side panels
+            if (!isChallenge) {
+                document.getElementById('learning-panel').classList.remove('hidden');
+                document.getElementById('challenge-hud').classList.add('hidden');
+            } else {
+                document.getElementById('learning-panel').classList.add('hidden');
+                document.getElementById('challenge-hud').classList.remove('hidden');
+                let hearts = '';
+                for(let i=0; i<3; i++) hearts += (i < engine.lives) ? '❤️' : '🖤';
+                document.getElementById('hud-lives').innerText = hearts;
+                document.getElementById('hud-score').innerText = engine.totalScore;
+            }
+
+            // Always-visible top HUD
+            document.getElementById('top-mode').innerText = isChallenge ? '⚔️ Challenge' : '🧠 Learning';
+            let topHearts = '';
+            for(let i=0; i<3; i++) topHearts += (i < engine.lives) ? '❤️' : '🖤';
+            document.getElementById('top-lives').innerText = topHearts;
+            document.getElementById('top-score').innerText = engine.totalScore;
+            document.getElementById('top-lives-wrap').style.display = isChallenge ? '' : 'none';
+            document.getElementById('top-score-wrap').style.display = isChallenge ? '' : 'none';
+            document.getElementById('top-hint').classList.toggle('hidden', isChallenge);
+
+            if (typeof gpafUpdatePanel === 'function') gpafUpdatePanel();
+        }
+
+        // --- 4. MAP GENERATION ---
+        function generateMap() {
+            const nodeCount = parseInt(document.getElementById('difficulty-select').value);
+            engine.mode = document.getElementById('mode-select').value;
+
+            mapGroup.clear();
+            labelsContainer.innerHTML = '';
+            nodesData = [];
+            edgesData = [];
+
+            const mapSize = 20;
+            // Dynamically reduce minDistance for larger node counts to prevent overlap
+            const minDistance = nodeCount <= 9 ? 8 : nodeCount <= 12 ? 6.5 : 5;
+            const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            function getNodeId(i) {
+                if (i < 26) return alphabet[i];
+                return alphabet[Math.floor(i / 26) - 1] + alphabet[i % 26];
+            }
+
+            for (let i = 0; i < nodeCount; i++) {
+                let attempts = 0, validPosition = false, randomX, randomZ;
+                // Increase max attempts and use progressive fallback for minDistance
+                let currentMinDist = minDistance;
+                while (!validPosition && attempts < 300) {
+                    // After 150 attempts, relax spacing to avoid infinite loops
+                    if (attempts === 150) currentMinDist = minDistance * 0.65;
+                    randomX = (Math.random() * mapSize * 2) - mapSize;
+                    randomZ = (Math.random() * mapSize * 2) - mapSize;
+                    validPosition = true;
+                    for (const node of nodesData) {
+                        if (Math.hypot(node.x - randomX, node.z - randomZ) < currentMinDist) { validPosition = false; break; }
+                    }
+                    attempts++;
+                }
+
+                const mesh = new THREE.Mesh(new THREE.BoxGeometry(1.5, 2.5, 1.5), unknownMat);
+                mesh.position.set(randomX, 1.25, randomZ);
+                mesh.userData = { id: getNodeId(i) }; 
+                mapGroup.add(mesh);
+
+                const label = document.createElement('div');
+                label.className = 'node-label text-white font-black text-2xl';
+                labelsContainer.appendChild(label);
+
+                nodesData.push({ id: getNodeId(i), x: randomX, z: randomZ, mesh: mesh, htmlElement: label });
+            }
+
+            const edgeSet = new Set(); // Track added edges to prevent duplicates
+
+            nodesData.forEach(sourceNode => {
+                const sortedNeighbors = [...nodesData]
+                    .filter(n => n.id !== sourceNode.id)
+                    .sort((a, b) => Math.hypot(a.x - sourceNode.x, a.z - sourceNode.z) - Math.hypot(b.x - sourceNode.x, b.z - sourceNode.z));
+
+                for(let k=0; k<2; k++) {
+                    const targetNode = sortedNeighbors[k];
+                    const key = [sourceNode.id, targetNode.id].sort().join('-');
+                    if(edgeSet.has(key)) continue;
+                    edgeSet.add(key);
+
+                    const tube = makeTube(sourceNode.x, sourceNode.z, targetNode.x, targetNode.z, lineMat.clone());
+                    mapGroup.add(tube);
+
+                    const weight = Math.floor(Math.random() * 12) + 2;
+                    const edgeLabel = document.createElement('div');
+                    edgeLabel.className = 'edge-label';
+                    edgeLabel.innerText = weight;
+                    labelsContainer.appendChild(edgeLabel);
+
+                    edgesData.push({ source: sourceNode.id, target: targetNode.id, weight, htmlElement: edgeLabel, labelPlane: null, mesh: tube });
+                }
+            });
+
+            // Fix: Ensure graph is fully connected - iterate until all nodes are reachable
+            function isGraphConnected() {
+                if (nodesData.length === 0) return true;
+                const visited = new Set();
+                const queue = [nodesData[0].id];
+                visited.add(nodesData[0].id);
+                while (queue.length > 0) {
+                    const curr = queue.shift();
+                    edgesData.forEach(e => {
+                        let neighbor = null;
+                        if (e.source === curr && !visited.has(e.target)) neighbor = e.target;
+                        if (e.target === curr && !visited.has(e.source)) neighbor = e.source;
+                        if (neighbor) { visited.add(neighbor); queue.push(neighbor); }
+                    });
+                }
+                return visited.size === nodesData.length;
+            }
+
+            // Iteratively connect isolated nodes until graph is fully connected
+            let safetyLimit = 0;
+            while (!isGraphConnected() && safetyLimit < 50) {
+                safetyLimit++;
+                // BFS to find the main connected component
+                const visited = new Set();
+                const queue = [nodesData[0].id];
+                visited.add(nodesData[0].id);
+                while (queue.length > 0) {
+                    const curr = queue.shift();
+                    edgesData.forEach(e => {
+                        let neighbor = null;
+                        if (e.source === curr && !visited.has(e.target)) neighbor = e.target;
+                        if (e.target === curr && !visited.has(e.source)) neighbor = e.source;
+                        if (neighbor) { visited.add(neighbor); queue.push(neighbor); }
+                    });
+                }
+                // Connect ONE isolated node per iteration (ensures BFS is re-run after each bridge)
+                const isolated = nodesData.filter(n => !visited.has(n.id));
+                if (isolated.length === 0) break;
+                const isoNode = isolated[0];
+                const nearest = nodesData
+                    .filter(n => visited.has(n.id))
+                    .sort((a, b) => Math.hypot(a.x - isoNode.x, a.z - isoNode.z) - Math.hypot(b.x - isoNode.x, b.z - isoNode.z))[0];
+                if (nearest) {
+                    const tube = makeTube(isoNode.x, isoNode.z, nearest.x, nearest.z, lineMat.clone());
+                    mapGroup.add(tube);
+                    const weight = Math.floor(Math.random() * 12) + 2;
+                    const edgeLabel = document.createElement('div');
+                    edgeLabel.className = 'edge-label';
+                    edgeLabel.innerText = weight;
+                    labelsContainer.appendChild(edgeLabel);
+                    edgesData.push({ source: isoNode.id, target: nearest.id, weight, htmlElement: edgeLabel, labelPlane: null, mesh: tube });
+                }
+            }
+
+            initDijkstra();
+
+            // DEBUG: verify all edges have visible tubes
+            console.log('Edges:', edgesData.map(e => `${e.source}-${e.target} tube=${e.mesh ? 'ok' : 'MISSING'} inGroup=${mapGroup.children.includes(e.mesh)}`));
+        }
+
+        // --- 5. DIJKSTRA ENGINE ---
+        function initDijkstra() {
+            engine.startId = nodesData[0].id;
+            engine.targetId = nodesData[nodesData.length - 1].id;
+            engine.distances = {};
+            engine.previous = {};
+            engine.visited.clear();
+            engine.frontier.clear();
+            engine.isActive = true;
+
+            nodesData.forEach(n => {
+                engine.distances[n.id] = Infinity;
+                engine.previous[n.id] = null;
+                n.mesh.material = unknownMat;
+            });
+            
+            edgesData.forEach(e => {
+                e.mesh.material = lineMat;
+                if (e.htmlElement) {
+                    e.htmlElement.style.color = '#fcd34d';
+                    e.htmlElement.style.borderColor = '#f59e0b';
+                    e.htmlElement.style.backgroundColor = 'rgba(15, 23, 42, 0.95)';
+                }
+            });
+
+            document.getElementById('ui-start').innerText = engine.startId;
+            document.getElementById('ui-target').innerText = engine.targetId;
+            document.querySelectorAll('.modal-overlay').forEach(el => el.style.display = 'none');
+
+            playerMesh.visible = false;
+            truckAnim.isMoving = false;
+
+            engine.distances[engine.startId] = 0;
+            engine.frontier.add(engine.startId);
+            winModalShown = false; // Reset win guard for new level
+            
+            clearLogs();
+            addLog(`🚀 <b>Game Started!</b><br>Calculate the cheapest route from ${engine.startId} to ${engine.targetId}. Click Node ${engine.startId} to begin.`, 'info');
+            updateHUD();
+            updateVisuals();
+            controls.reset();
+        }
+
+        function getNeighbors(nodeId) {
+            const neighbors = [];
+            edgesData.forEach(e => {
+                if (e.source === nodeId) neighbors.push({ id: e.target, weight: e.weight });
+                if (e.target === nodeId) neighbors.push({ id: e.source, weight: e.weight });
+            });
+            return neighbors;
+        }
+
+        window.addEventListener('pointerdown', (event) => {
+            if (!engine.isActive) return;
+            if (event.button !== 0) return; // Only Left Click
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            
+            // Only intersect node meshes (not tubes/roads which have no userData.id)
+            const nodeMeshes = nodesData.map(n => n.mesh);
+            const intersects = raycaster.intersectObjects(nodeMeshes);
+            if (intersects.length > 0 && intersects[0].object.userData.id) {
+                handleNodeClick(intersects[0].object.userData.id);
+            }
+        });
+
+        function handleNodeClick(clickedId) {
+            if (!engine.frontier.has(clickedId)) {
+                if(engine.mode === 'learning') addLog(`❌ <b>Invalid Selection.</b> You can only select Orange nodes (Frontier).`, 'error');
+                return;
+            }
+
+            let minId = null;
+            let minDist = Infinity;
+            engine.frontier.forEach(id => {
+                if (engine.distances[id] < minDist) { minDist = engine.distances[id]; minId = id; }
+            });
+
+            // Fix 6: If clicked node ties with the minimum, it's also a valid choice
+            if (engine.distances[clickedId] === minDist) {
+                minId = clickedId;
+            }
+
+            // WRONG CHOICE
+            if (clickedId !== minId) {
+                if (engine.mode === 'learning') {
+                    addLog(`❌ <b>Math Error!</b> You clicked Node ${clickedId} (Cost: ${engine.distances[clickedId]}). But Node <b>${minId}</b> is cheaper (Cost: ${minDist}). Always pick the lowest!`, 'error');
+                } else {
+                    engine.lives--;
+                    updateHUD();
+                    // Fix: Flash the correct node using a snapshot of its current material TYPE, not a reference
+                    const correctNode = nodesData.find(n => n.id === minId);
+                    if (correctNode) {
+                        const flashMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, emissive: 0x22c55e, emissiveIntensity: 0.6 });
+                        correctNode.mesh.material = flashMat;
+                        setTimeout(() => {
+                            // Re-derive the correct material from current game state instead of stale reference
+                            if (correctNode.id === engine.targetId) correctNode.mesh.material = targetMat;
+                            else if (engine.visited.has(correctNode.id)) correctNode.mesh.material = settledMat;
+                            else if (engine.frontier.has(correctNode.id)) correctNode.mesh.material = frontierMat;
+                            else correctNode.mesh.material = unknownMat;
+                        }, 800);
+                    }
+                    if (engine.lives <= 0) triggerGameOver();
+                }
+                return;
+            }
+
+            // CORRECT CHOICE
+            engine.frontier.delete(clickedId);
+            engine.visited.add(clickedId);
+
+            if (engine.mode === 'learning') {
+                addLog(`✅ <b>Correct!</b> Node ${clickedId} locked (Cost: ${engine.distances[clickedId]}). Discovering its neighbors...`, 'success');
+            }
+
+            const neighbors = getNeighbors(clickedId);
+            neighbors.forEach(neighbor => {
+                if (!engine.visited.has(neighbor.id)) {
+                    const altPathDist = engine.distances[clickedId] + neighbor.weight;
+                    if (altPathDist < engine.distances[neighbor.id]) {
+                        engine.distances[neighbor.id] = altPathDist;
+                        engine.previous[neighbor.id] = clickedId;
+                    }
+                    engine.frontier.add(neighbor.id);
+                }
+            });
+
+            updateVisuals();
+
+            if (clickedId === engine.targetId) {
+                engine.isActive = false;
+                triggerWinSequence();
+            }
+        }
+
+        function updateVisuals() {
+            nodesData.forEach(n => {
+                let distHtml = '';
+                // Only show math badges in Learning mode
+                if (engine.mode === 'learning') {
+                    const distStr = engine.distances[n.id] === Infinity ? '∞' : engine.distances[n.id];
+                    distHtml = `<div class="text-sm font-normal bg-black/80 rounded px-1 mt-1 text-yellow-300 border border-slate-500">${distStr}</div>`;
+                }
+                
+                n.htmlElement.innerHTML = `<div class="node-id">${n.id}</div>${distHtml}`;
+
+                if (n.id === engine.targetId) n.mesh.material = targetMat;
+                else if (engine.visited.has(n.id)) n.mesh.material = settledMat;
+                else if (engine.frontier.has(n.id)) n.mesh.material = frontierMat;
+                else n.mesh.material = unknownMat;
+            });
+        }
+
+        let winModalShown = false; // Guard to prevent double score counting
+
+        function triggerWinSequence() {
+            if(engine.mode === 'learning') addLog(`🎉 <b>Target Reached!</b> Dispatching truck on the optimal route.`, 'success');
+            
+            // Reconstruct path
+            let path = [];
+            let curr = engine.targetId;
+            while (curr !== null) { path.unshift(curr); curr = engine.previous[curr]; }
+
+            for (let i = 0; i < path.length - 1; i++) {
+                const s = path[i]; const t = path[i+1];
+                const edge = edgesData.find(e => (e.source === s && e.target === t) || (e.source === t && e.target === s));
+                if(edge) {
+                    edge.mesh.material = activeLineMat;
+                    if (edge.htmlElement) {
+                        edge.htmlElement.style.color = '#6ee7b7';
+                        edge.htmlElement.style.borderColor = '#10b981';
+                        edge.htmlElement.style.backgroundColor = 'rgba(6, 78, 59, 0.95)';
+                    }
+                }
+            }
+
+            truckAnim.path = path;
+            truckAnim.currentIdx = 0;
+            truckAnim.progress = 0;
+            
+            const startPos = nodesData.find(n => n.id === path[0]);
+            playerMesh.position.set(startPos.x, 4.5, startPos.z);
+            playerMesh.visible = true;
+            truckAnim.isMoving = true;
+        }
+
+        function triggerGameOver() {
+            engine.isActive = false;
+            gpafEndSession(false); // GPAF: challenge session ended without completing
+            document.getElementById('lose-score').innerText = engine.totalScore;
+            document.getElementById('lose-modal').style.display = 'flex';
+        }
+
+        function showWinModal() {
+            const diffStr = document.getElementById('difficulty-select').value;
+            const statsBox = document.getElementById('win-stats');
+            
+            if (engine.mode === 'challenge') {
+                const conf = scoreSettings[diffStr];
+                const base = conf.base;
+                const bonus = engine.lives * conf.lifeBonus;
+                const levelScore = base + bonus;
+                engine.totalScore += levelScore;
+                updateHUD();
+
+                statsBox.innerHTML = `
+                    <div class="flex justify-between mb-2"><span class="text-slate-400">Difficulty Base:</span><span class="text-white font-bold">+${base}</span></div>
+                    <div class="flex justify-between mb-2"><span class="text-slate-400">Lives Bonus (${engine.lives}x${conf.lifeBonus}):</span><span class="text-emerald-400 font-bold">+${bonus}</span></div>
+                    <div class="border-t border-slate-700 mt-2 pt-2 flex justify-between"><span class="text-slate-300 font-bold">Total Score:</span><span class="text-amber-400 font-black text-xl">${engine.totalScore}</span></div>
+                `;
+            } else {
+                statsBox.innerHTML = `
+                    <p class="text-slate-300 text-center">You successfully completed the tutorial level using Dijkstra's Algorithm logic.</p>
+                `;
+            }
+            // GPAF: a map/level was completed (recorded ONLY in Challenge mode)
+            if (engine.mode === 'challenge') {
+                gpaf.levelCounter++;
+                gpafLog('level_complete', { level: gpaf.levelCounter, difficulty: parseInt(diffStr) });
+                gpafLog('score_update', { score: engine.totalScore });
+            }
+            document.getElementById('win-modal').style.display = 'flex';
+        }
+
+        // --- 7. RENDER LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+
+            if (truckAnim.isMoving && truckAnim.currentIdx < truckAnim.path.length - 1) {
+                truckAnim.progress += 0.03; 
+                playerMesh.rotation.y += 0.1;
+                
+                const startN = nodesData.find(n => n.id === truckAnim.path[truckAnim.currentIdx]);
+                const endN = nodesData.find(n => n.id === truckAnim.path[truckAnim.currentIdx + 1]);
+                const startPos = new THREE.Vector3(startN.x, 4.5, startN.z);
+                const endPos = new THREE.Vector3(endN.x, 4.5, endN.z);
+
+                if (truckAnim.progress >= 1) {
+                    truckAnim.progress = 0;
+                    truckAnim.currentIdx++;
+                    if(truckAnim.currentIdx >= truckAnim.path.length - 1) {
+                        truckAnim.isMoving = false;
+                        playerMesh.rotation.y = 0;
+                        if (!winModalShown) { winModalShown = true; showWinModal(); } // Guard against double fire
+                    }
+                } else {
+                    playerMesh.position.lerpVectors(startPos, endPos, truckAnim.progress);
+                    playerMesh.position.y += Math.sin(truckAnim.progress * Math.PI) * 1.5; 
+                }
+            } else if (engine.isActive) {
+                const scale = 1 + Math.sin(Date.now() * 0.005) * 0.05;
+                nodesData.forEach(n => {
+                    if(engine.frontier.has(n.id)) n.mesh.scale.set(scale, scale, scale);
+                    else n.mesh.scale.set(1, 1, 1);
+                });
+            }
+
+            const tempV = new THREE.Vector3();
+            const W = window.innerWidth, H = window.innerHeight;
+            const labelItems = [];
+
+            // Node letters: anchored JUST ABOVE the cube so each letter clearly belongs to its node.
+            // weight = resistance to being pushed (heavy -> barely moves); spring = pull back to its node.
+            nodesData.forEach(node => {
+                tempV.set(node.x, 4, node.z); // low, hugging the cube top
+                tempV.project(camera);
+                const x = (tempV.x * .5 + .5) * W;
+                const y = (tempV.y * -.5 + .5) * H;
+                labelItems.push({ el: node.htmlElement, x, y, ax: x, ay: y,
+                    w: node.htmlElement.offsetWidth, h: node.htmlElement.offsetHeight,
+                    weight: 6, spring: 0.5 });
+            });
+
+            // Edge cost tags: anchored at the tube centre, light + springy so they slide out of the way.
+            edgesData.forEach(edge => {
+                if (!edge.htmlElement) return;
+                const box = new THREE.Box3().setFromObject(edge.mesh);
+                const center = new THREE.Vector3();
+                box.getCenter(center);
+                tempV.copy(center);
+                tempV.y = 1.5;
+                tempV.project(camera);
+                const x = (tempV.x * .5 + .5) * W;
+                const y = (tempV.y * -.5 + .5) * H;
+                labelItems.push({ el: edge.htmlElement, x, y, ax: x, ay: y,
+                    w: edge.htmlElement.offsetWidth, h: edge.htmlElement.offsetHeight,
+                    weight: 1, spring: 0.1 });
+            });
+
+            // --- Repulsion: separate ANY overlapping pair (letter-letter, letter-cost, cost-cost). ---
+            // Push is shared inversely by weight, so letters move little and stay near their node,
+            // while cost tags do most of the moving. A spring pulls each label back to its anchor.
+            const PAD = 3;
+            function resolveOverlaps(useSpring) {
+                for (let i = 0; i < labelItems.length; i++) {
+                    for (let j = i + 1; j < labelItems.length; j++) {
+                        const a = labelItems[i], b = labelItems[j];
+                        const dx = b.x - a.x, dy = b.y - a.y;
+                        const ox = (a.w + b.w) / 2 + PAD - Math.abs(dx);
+                        const oy = (a.h + b.h) / 2 + PAD - Math.abs(dy);
+                        if (ox > 0 && oy > 0) { // overlap -> separate along the shallower axis
+                            const tot = a.weight + b.weight;
+                            const sa = b.weight / tot, sb = a.weight / tot; // heavier item moves less
+                            if (ox < oy) {
+                                const push = (dx === 0 ? ox : (dx < 0 ? -ox : ox));
+                                a.x -= push * sa; b.x += push * sb;
+                            } else {
+                                const push = (dy === 0 ? oy : (dy < 0 ? -oy : oy));
+                                a.y -= push * sa; b.y += push * sb;
+                            }
+                        }
+                    }
+                }
+                if (useSpring) {
+                    for (const it of labelItems) {
+                        it.x += (it.ax - it.x) * it.spring;
+                        it.y += (it.ay - it.y) * it.spring;
+                    }
+                }
+            }
+            // Spring-balanced passes (keep labels near their anchors)...
+            for (let pass = 0; pass < 6; pass++) resolveOverlaps(true);
+            // ...then a few pure-separation passes so NO overlap remains in the final frame.
+            for (let pass = 0; pass < 3; pass++) resolveOverlaps(false);
+
+            for (const it of labelItems) {
+                it.el.style.left = `${it.x}px`;
+                it.el.style.top = `${it.y}px`;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Events
+        document.getElementById('generate-btn').addEventListener('click', () => { engine.lives = 3; engine.totalScore = 0; generateMap(); gpafResetSession(); });
+        document.getElementById('mode-select').addEventListener('change', () => { engine.lives = 3; engine.totalScore = 0; generateMap(); gpafResetSession(); });
+        // Fix 1: Changing difficulty now regenerates the map (full reset)
+        document.getElementById('difficulty-select').addEventListener('change', () => { engine.lives = 3; engine.totalScore = 0; generateMap(); gpafResetSession(); });
+        // Fix 2: Next level keeps accumulating score but refills lives to 3 each map (no death-spiral)
+        document.getElementById('next-level-btn').addEventListener('click', () => { engine.lives = 3; generateMap(); });
+        document.getElementById('retry-btn').addEventListener('click', () => { engine.lives = 3; engine.totalScore = 0; generateMap(); gpafResetSession(); }); // Reset on fail
+
+        // Init
+        generateMap();
+        animate();
+
+        // GPAF: wire the logging panel and open the first session (only logs in Challenge mode)
+        (function initGpafPanel() {
+            const gidInput = document.getElementById('gpaf-gameid');
+            gidInput.value = gpaf.gameId;
+            gidInput.addEventListener('input', () => {
+                gpaf.gameId = gidInput.value.trim() || 'GM-XXXXXXXXXXXX';
+                try { localStorage.setItem('gpaf_gameid', gpaf.gameId); } catch (e) {}
+            });
+            document.getElementById('gpaf-pid').innerText = gpaf.playerPseudoId;
+            document.getElementById('gpaf-download').addEventListener('click', gpafDownload);
+            window.addEventListener('beforeunload', () => gpafEndSession(false));
+            gpafUpdatePanel();
+        })();
+        gpafStartSession();
+
+        window.addEventListener('resize', () => {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -d * aspect;
+            camera.right = d * aspect;
+            camera.top = d;
+            camera.bottom = -d;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
