@@ -46,6 +46,28 @@
         #log-container::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
 
         .modal-overlay { display: none; }
+
+        .distance-row {
+            display: grid;
+            grid-template-columns: 34px 1fr 42px 48px;
+            gap: 8px;
+            align-items: center;
+            padding: 6px 8px;
+            border-bottom: 1px solid rgba(51, 65, 85, 0.75);
+        }
+
+        .distance-row:last-child { border-bottom: 0; }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            padding: 2px 6px;
+            font-size: 11px;
+            font-weight: 900;
+            line-height: 1.1;
+        }
     </style>
     
     <script type="importmap">
@@ -94,6 +116,31 @@
                 <p class="text-xs text-slate-400 mt-0.5">Rule: Pick the lowest total cost.</p>
             </div>
             <div id="log-container" class="p-3 overflow-y-auto flex-1 flex flex-col gap-2 text-xs">
+            </div>
+        </div>
+
+        <!-- LEFT TOP PANEL: algorithm state -->
+        <div class="absolute top-6 left-6 bg-slate-900/90 w-80 rounded-xl border border-slate-700 shadow-xl pointer-events-auto overflow-hidden">
+            <div class="p-3 border-b border-slate-700 bg-slate-800/80">
+                <div class="flex items-center justify-between gap-3">
+                    <h2 class="text-base font-extrabold text-cyan-300">Route Table</h2>
+                    <span id="accuracy-badge" class="badge bg-slate-700 text-slate-200">0/0</span>
+                </div>
+                <div class="mt-3 h-2 bg-slate-800 border border-slate-700 rounded overflow-hidden">
+                    <div id="progress-bar" class="h-full bg-cyan-400" style="width:0%"></div>
+                </div>
+            </div>
+            <div class="distance-row text-[10px] uppercase tracking-wide text-slate-500 font-black bg-slate-950/40">
+                <span>Node</span><span>Status</span><span>Cost</span><span>Prev</span>
+            </div>
+            <div id="distance-table" class="max-h-64 overflow-y-auto text-xs"></div>
+            <div class="p-3 border-t border-slate-700 grid grid-cols-2 gap-2">
+                <button id="hint-btn" class="bg-cyan-700 hover:bg-cyan-600 text-white font-bold py-2 px-3 rounded shadow border border-cyan-500">
+                    Hint
+                </button>
+                <button id="restart-level-btn" class="bg-slate-700 hover:bg-slate-600 text-white font-bold py-2 px-3 rounded shadow border border-slate-500">
+                    Restart Level
+                </button>
             </div>
         </div>
 
@@ -255,6 +302,10 @@
             mode: 'learning', // 'learning' | 'challenge'
             lives: 3,
             totalScore: 0,
+            moves: 0,
+            correctMoves: 0,
+            mistakes: 0,
+            hintsUsed: 0,
             startId: null, targetId: null, distances: {}, previous: {},
             visited: new Set(), frontier: new Set(), isActive: false
         };
@@ -413,6 +464,58 @@
             document.getElementById('top-hint').classList.toggle('hidden', isChallenge);
 
             if (typeof gpafUpdatePanel === 'function') gpafUpdatePanel();
+            updateDistanceTable();
+        }
+
+        function getBestFrontierIds() {
+            let minDist = Infinity;
+            engine.frontier.forEach(id => {
+                if (engine.distances[id] < minDist) minDist = engine.distances[id];
+            });
+            return [...engine.frontier].filter(id => engine.distances[id] === minDist).sort();
+        }
+
+        function updateDistanceTable() {
+            const table = document.getElementById('distance-table');
+            if (!table || nodesData.length === 0) return;
+
+            const bestIds = new Set(getBestFrontierIds());
+            const rows = [...nodesData].sort((a, b) => a.id.localeCompare(b.id)).map(node => {
+                const id = node.id;
+                const dist = engine.distances[id] === Infinity ? '∞' : engine.distances[id];
+                const prev = engine.previous[id] || '-';
+                let status = 'Unvisited';
+                let statusClass = 'bg-slate-800 text-slate-300';
+                if (id === engine.targetId) {
+                    status = engine.visited.has(id) ? 'Reached' : 'Target';
+                    statusClass = 'bg-emerald-900 text-emerald-200';
+                } else if (engine.visited.has(id)) {
+                    status = 'Locked';
+                    statusClass = 'bg-blue-900 text-blue-200';
+                } else if (engine.frontier.has(id)) {
+                    status = bestIds.has(id) ? 'Best next' : 'Frontier';
+                    statusClass = bestIds.has(id) ? 'bg-amber-700 text-white' : 'bg-amber-950 text-amber-200';
+                }
+                return `
+                    <div class="distance-row text-slate-200">
+                        <span class="font-black text-white">${id}</span>
+                        <span><span class="badge ${statusClass}">${status}</span></span>
+                        <span class="font-mono text-yellow-300">${dist}</span>
+                        <span class="font-mono text-slate-300">${prev}</span>
+                    </div>
+                `;
+            }).join('');
+
+            table.innerHTML = rows;
+            const progress = nodesData.length ? Math.round((engine.visited.size / nodesData.length) * 100) : 0;
+            const progressBar = document.getElementById('progress-bar');
+            if (progressBar) progressBar.style.width = `${progress}%`;
+            const badge = document.getElementById('accuracy-badge');
+            if (badge) {
+                const total = engine.correctMoves + engine.mistakes;
+                const pct = total ? Math.round((engine.correctMoves / total) * 100) : 0;
+                badge.innerText = total ? `${pct}% accuracy` : 'Ready';
+            }
         }
 
         // --- 4. MAP GENERATION ---
@@ -557,6 +660,10 @@
             engine.visited.clear();
             engine.frontier.clear();
             engine.isActive = true;
+            engine.moves = 0;
+            engine.correctMoves = 0;
+            engine.mistakes = 0;
+            engine.hintsUsed = 0;
 
             nodesData.forEach(n => {
                 engine.distances[n.id] = Infinity;
@@ -619,26 +726,48 @@
         function handleNodeClick(clickedId) {
             if (!engine.frontier.has(clickedId)) {
                 if(engine.mode === 'learning') addLog(`❌ <b>Invalid Selection.</b> You can only select Orange nodes (Frontier).`, 'error');
+                if (engine.mode === 'challenge') {
+                    engine.moves++;
+                    engine.mistakes++;
+                    gpafLog('node_select', {
+                        selectedNode: clickedId,
+                        validFrontier: false,
+                        correct: false,
+                        reason: 'not_frontier',
+                        difficulty: parseInt(document.getElementById('difficulty-select').value),
+                        moves: engine.moves,
+                        mistakes: engine.mistakes
+                    });
+                    updateHUD();
+                }
                 return;
             }
 
-            let minId = null;
-            let minDist = Infinity;
-            engine.frontier.forEach(id => {
-                if (engine.distances[id] < minDist) { minDist = engine.distances[id]; minId = id; }
-            });
-
-            // Fix 6: If clicked node ties with the minimum, it's also a valid choice
-            if (engine.distances[clickedId] === minDist) {
-                minId = clickedId;
-            }
+            const bestFrontierIds = getBestFrontierIds();
+            const minId = bestFrontierIds[0];
+            const minDist = engine.distances[minId];
+            const isCorrectChoice = bestFrontierIds.includes(clickedId);
+            engine.moves++;
 
             // WRONG CHOICE
-            if (clickedId !== minId) {
+            if (!isCorrectChoice) {
+                engine.mistakes++;
                 if (engine.mode === 'learning') {
                     addLog(`❌ <b>Math Error!</b> You clicked Node ${clickedId} (Cost: ${engine.distances[clickedId]}). But Node <b>${minId}</b> is cheaper (Cost: ${minDist}). Always pick the lowest!`, 'error');
                 } else {
                     engine.lives--;
+                    gpafLog('node_select', {
+                        selectedNode: clickedId,
+                        expectedNodes: bestFrontierIds,
+                        selectedCost: engine.distances[clickedId],
+                        expectedCost: minDist,
+                        validFrontier: true,
+                        correct: false,
+                        difficulty: parseInt(document.getElementById('difficulty-select').value),
+                        moves: engine.moves,
+                        mistakes: engine.mistakes,
+                        livesRemaining: engine.lives
+                    });
                     updateHUD();
                     // Fix: Flash the correct node using a snapshot of its current material TYPE, not a reference
                     const correctNode = nodesData.find(n => n.id === minId);
@@ -659,11 +788,24 @@
             }
 
             // CORRECT CHOICE
+            engine.correctMoves++;
             engine.frontier.delete(clickedId);
             engine.visited.add(clickedId);
 
             if (engine.mode === 'learning') {
                 addLog(`✅ <b>Correct!</b> Node ${clickedId} locked (Cost: ${engine.distances[clickedId]}). Discovering its neighbors...`, 'success');
+            } else {
+                gpafLog('node_select', {
+                    selectedNode: clickedId,
+                    selectedCost: engine.distances[clickedId],
+                    expectedNodes: bestFrontierIds,
+                    validFrontier: true,
+                    correct: true,
+                    difficulty: parseInt(document.getElementById('difficulty-select').value),
+                    moves: engine.moves,
+                    correctMoves: engine.correctMoves,
+                    visitedCount: engine.visited.size
+                });
             }
 
             const neighbors = getNeighbors(clickedId);
@@ -679,6 +821,7 @@
             });
 
             updateVisuals();
+            updateHUD();
 
             if (clickedId === engine.targetId) {
                 engine.isActive = false;
@@ -737,6 +880,42 @@
             truckAnim.isMoving = true;
         }
 
+        function describeFinalPath() {
+            const path = [];
+            let curr = engine.targetId;
+            while (curr !== null) { path.unshift(curr); curr = engine.previous[curr]; }
+            const cost = engine.distances[engine.targetId] === Infinity ? '-' : engine.distances[engine.targetId];
+            return { path, cost };
+        }
+
+        function showHint() {
+            if (!engine.isActive) return;
+            const best = getBestFrontierIds();
+            if (best.length === 0) return;
+            engine.hintsUsed++;
+            const hintText = best.length > 1
+                ? `💡 <b>Hint:</b> There is a tie. Any of these minimum-cost frontier nodes are valid: <b>${best.join(', ')}</b>.`
+                : `💡 <b>Hint:</b> The next minimum-cost frontier node is <b>${best[0]}</b> with cost <b>${engine.distances[best[0]]}</b>.`;
+            addLog(hintText, 'info');
+            if (engine.mode === 'challenge') {
+                gpafLog('hint_used', {
+                    suggestedNodes: best,
+                    suggestedCost: engine.distances[best[0]],
+                    hintsUsed: engine.hintsUsed,
+                    difficulty: parseInt(document.getElementById('difficulty-select').value)
+                });
+            }
+            updateHUD();
+        }
+
+        function restartLevel() {
+            engine.lives = 3;
+            initDijkstra();
+            if (engine.mode === 'challenge') {
+                gpafLog('level_restart', { difficulty: parseInt(document.getElementById('difficulty-select').value) });
+            }
+        }
+
         function triggerGameOver() {
             engine.isActive = false;
             gpafEndSession(false); // GPAF: challenge session ended without completing
@@ -747,6 +926,9 @@
         function showWinModal() {
             const diffStr = document.getElementById('difficulty-select').value;
             const statsBox = document.getElementById('win-stats');
+            const finalPath = describeFinalPath();
+            const totalAttempts = engine.correctMoves + engine.mistakes;
+            const accuracy = totalAttempts ? Math.round((engine.correctMoves / totalAttempts) * 100) : 100;
             
             if (engine.mode === 'challenge') {
                 const conf = scoreSettings[diffStr];
@@ -759,17 +941,31 @@
                 statsBox.innerHTML = `
                     <div class="flex justify-between mb-2"><span class="text-slate-400">Difficulty Base:</span><span class="text-white font-bold">+${base}</span></div>
                     <div class="flex justify-between mb-2"><span class="text-slate-400">Lives Bonus (${engine.lives}x${conf.lifeBonus}):</span><span class="text-emerald-400 font-bold">+${bonus}</span></div>
+                    <div class="flex justify-between mb-2"><span class="text-slate-400">Accuracy:</span><span class="text-cyan-300 font-bold">${accuracy}%</span></div>
+                    <div class="flex justify-between mb-2"><span class="text-slate-400">Shortest Path:</span><span class="text-white font-bold">${finalPath.path.join(' → ')}</span></div>
+                    <div class="flex justify-between mb-2"><span class="text-slate-400">Path Cost:</span><span class="text-yellow-300 font-bold">${finalPath.cost}</span></div>
                     <div class="border-t border-slate-700 mt-2 pt-2 flex justify-between"><span class="text-slate-300 font-bold">Total Score:</span><span class="text-amber-400 font-black text-xl">${engine.totalScore}</span></div>
                 `;
             } else {
                 statsBox.innerHTML = `
-                    <p class="text-slate-300 text-center">You successfully completed the tutorial level using Dijkstra's Algorithm logic.</p>
+                    <p class="text-slate-300 text-center mb-3">You successfully completed the tutorial level using Dijkstra's Algorithm logic.</p>
+                    <div class="flex justify-between mb-2"><span class="text-slate-400">Shortest Path:</span><span class="text-white font-bold">${finalPath.path.join(' → ')}</span></div>
+                    <div class="flex justify-between"><span class="text-slate-400">Path Cost:</span><span class="text-yellow-300 font-bold">${finalPath.cost}</span></div>
                 `;
             }
             // GPAF: a map/level was completed (recorded ONLY in Challenge mode)
             if (engine.mode === 'challenge') {
                 gpaf.levelCounter++;
-                gpafLog('level_complete', { level: gpaf.levelCounter, difficulty: parseInt(diffStr) });
+                gpafLog('level_complete', {
+                    level: gpaf.levelCounter,
+                    difficulty: parseInt(diffStr),
+                    shortestPath: finalPath.path,
+                    pathCost: finalPath.cost,
+                    accuracy,
+                    moves: engine.moves,
+                    mistakes: engine.mistakes,
+                    hintsUsed: engine.hintsUsed
+                });
                 gpafLog('score_update', { score: engine.totalScore });
             }
             document.getElementById('win-modal').style.display = 'flex';
@@ -893,6 +1089,8 @@
         // Fix 2: Next level keeps accumulating score but refills lives to 3 each map (no death-spiral)
         document.getElementById('next-level-btn').addEventListener('click', () => { engine.lives = 3; generateMap(); });
         document.getElementById('retry-btn').addEventListener('click', () => { engine.lives = 3; engine.totalScore = 0; generateMap(); gpafResetSession(); }); // Reset on fail
+        document.getElementById('hint-btn').addEventListener('click', showHint);
+        document.getElementById('restart-level-btn').addEventListener('click', restartLevel);
 
         // Init
         generateMap();
